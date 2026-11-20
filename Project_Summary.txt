@@ -1,0 +1,153 @@
+================================================================================
+  AI-BASED PERSONALIZED HANDWRITING GENERATOR - PROJECT SUMMARY
+  Based on VATr (Pippi et al., "Handwritten Text Generation from Visual
+  Archetypes", CVPR 2023), implemented with a ResNet-50 style encoder
+================================================================================
+
+1. WHAT THE PROJECT DOES
+--------------------------------------------------------------------------------
+  Input : any text  +  a handwriting style (15 word images of one person: an
+          IAM writer, a folder of word images, or a photo of a handwritten page)
+  Output: an image of that text written in that person's handwriting.
+  Works also for writers never seen during training (few-shot style transfer).
+
+  Dataset : IAM Handwriting Database (word level), Kaggle dataset
+            "venkatanarayana55/dataset-dl"
+            95,927 usable words, 657 writers -> 440 training writers,
+            207 unseen test writers, 79-character alphabet.
+  Hardware: Kaggle, 1 x NVIDIA Tesla T4 GPU, ~11.5 h session.
+
+
+2. MODELS USED
+--------------------------------------------------------------------------------
+  Network                  Role                                     Params
+  -----------------------  ---------------------------------------  -------
+  ResNet-50 (ImageNet,     style feature extractor (conv1..layer3,   9.1 M
+   grayscale, frozen in     pre-trained on IAM writer classification)
+   stage 2)
+  Transformer encoder      style encoder: 3 layers, 8 heads, d=512   } part of
+  Transformer decoder      writes characters: 3 layers, 8 heads,     } generator
+                            cross-attention to style                 } 32.4 M
+  Convolutional decoder    Linear 512->8192 + 4 residual up-sampling } (total)
+                            blocks + tanh -> 32 px x 16 px per char  }
+  Discriminator D          spectral-norm CNN, hinge loss (realism)   9.8 M
+  Recognizer R (CRNN)      CNN + BiLSTM + CTC (text correctness)     8.2 M
+  Writer classifier W      ResNet-18 (style correctness)             11.4 M
+  Inception-v3             feature extractor for FID / KID / GS      (eval only)
+
+  Content input = "visual archetypes": each character drawn in GNU Unifont as a
+  16 x 16 binary image (256 values) -> Linear + LayerNorm -> decoder query.
+
+
+3. ARCHITECTURE (SHORT)
+--------------------------------------------------------------------------------
+  15 style images [15 x 32 x 128]
+     -> ResNet-50 (2 x 8 grid, 1024 ch) -> 1x1 conv -> 16 tokens/image
+     -> Transformer encoder -> 240 style vectors S
+  text "hello" -> Unifont glyphs -> Linear + LayerNorm (+ position)
+     -> Transformer decoder (self-attention + cross-attention to S)
+     -> + content skip + global style skip + small noise
+     -> Linear 512 -> 8192 -> reshape 512 x 4 x 4k
+     -> 4 residual up-sampling blocks -> tanh -> image 32 x 16k pixels
+
+  Losses (generator): adversarial (hinge) + HTR (CTC) + writer cross-entropy
+     + cycle-consistency (L1 on style vectors) + writer loss on style vectors,
+     combined with gradient balancing (as in HWT/VATr).
+
+  Training:
+     Stage 1 - 3 epochs: pre-train ResNet-50 (writer ID), R and W on real words.
+     Stage 2 - 45,879 iterations (~12 epochs), batch 8 writers:
+               phase A content warm-up (5,000 it, no discriminator),
+               phase B adversarial training.
+     Validation every 4,000 it; best model kept automatically (iteration 24,000)
+     score = FID x (1 + CER) x (1 + 2 x (1 - style accuracy)).
+
+
+4. FINAL METRICS (best model, run 3)
+--------------------------------------------------------------------------------
+  Metric                                 Generated     Real (reference)
+  -------------------------------------  ------------  ----------------
+  CER  (unseen writers)          lower   0.0055        0.0790
+  WER  (unseen writers)          lower   0.0218        0.2214
+  Word accuracy (unseen)         higher  97.8 %        77.9 %
+  Character F1 (micro / macro)   higher  0.995 / 0.850 0.927 / 0.800
+  FID  (unseen / seen)           lower   51.1 / 53.3   4.7 (real vs real)
+  KID                            lower   0.025         -
+  GS   (unseen / seen)           lower   0.0094/0.0045 -
+  Writer-ID accuracy (seen)      higher  50.9 %        72.2 %   (chance 0.23 %)
+  Writer-ID top-5 (seen)         higher  73.3 %        87.3 %
+  Writer-ID F1 weighted / kappa / MCC    0.52/0.51/0.51  0.73/0.72/0.72
+  Unseen-writer retrieval (204)  higher  71.1 %        100 %    (chance 0.49 %)
+
+  Comparison with the VATr paper: paper FID 17.79, GS 0.0168 (64 px images,
+  different protocol, much longer training) -> not directly comparable; our
+  images are blurrier, while text legibility and measured style transfer are
+  strong. Note: CER and writer-ID were measured with networks that also guided
+  training, so they are somewhat optimistic.
+
+  Development history (ablation):
+     Run 1: mode collapse (CER 1.00, FID 204)        -> content-embedding fix,
+            gradient balancing, warm-up
+     Run 2: legible, no style (writer-ID 0.6 %)      -> writer loss on style
+            vectors, frozen backbone, style-aware model selection
+     Run 3: all goals met (table above)              -> final model
+
+
+5. TECH STACK AND LIBRARIES
+--------------------------------------------------------------------------------
+  Platform     Kaggle Notebooks (Jupyter), GPU Tesla T4 (CUDA 13.0)
+  Language     Python 3
+  Deep learning
+    torch 2.11 (PyTorch)        models, training, CTC loss (FP32)
+    torchvision 0.26            ResNet-50, ResNet-18, Inception-v3 (ImageNet)
+    torch.func                  functional_call (frozen-encoder cycle loss)
+  Data / images
+    numpy                       arrays
+    opencv-python (cv2)         image loading, resizing, page segmentation
+    Pillow (PIL)                font rendering, image saving
+    kagglehub                   dataset download fallback
+  Evaluation
+    scipy                       distance matrices (Geometry Score)
+    scikit-learn                accuracy, precision/recall/F1, kappa, MCC,
+                                confusion matrices, top-k accuracy
+    gudhi                       persistent homology (Geometry Score)
+    pandas                      metrics tables, CSV export
+  Visualisation
+    matplotlib                  sample sheets, curves, confusion matrices
+  Other
+    GNU Unifont 15.1.05         character glyphs (visual archetypes)
+    multiprocessing, pickle     parallel loading, image cache
+
+  Saved artefacts
+    vatr_resnet50_generator.pt  best generator (~130 MB) - used by the UI
+    checkpoints/best_G.pt, last.pt; evaluation/metrics.csv, metrics.json
+
+
+6. USER INTERFACE (PLANNED - STREAMLIT)
+--------------------------------------------------------------------------------
+  Goal: a simple web app to generate handwriting with the trained model.
+
+  Features
+    * Text box: type the text to write (multi-line).
+    * Style source (choose one):
+        - IAM writer from a dropdown (bundled sample word images)
+        - upload a photo of a handwritten page (automatic word segmentation)
+        - upload several single-word images
+    * Preview of the 15 style words that were extracted.
+    * Controls: random seed (variation), line width, noise level.
+    * Output: generated handwriting image + "Download PNG" button.
+
+  Implementation plan
+    * model.py : model classes + Unifont glyph loader + generation and
+                 segmentation functions (copied from the notebook, no training).
+    * app.py   : Streamlit page; loads vatr_resnet50_generator.pt once
+                 (@st.cache_resource); runs generation on CPU or GPU.
+    * requirements.txt : streamlit, torch, torchvision, opencv-python,
+                 pillow, numpy.
+    * Run locally:  streamlit run app.py
+      (CPU is enough: about 1-3 s per sentence). Optional deployment on
+      Streamlit Community Cloud for a public link.
+
+================================================================================
+Hello! This is my personalized handwriting generator.
+It writes any text in the style you choose.

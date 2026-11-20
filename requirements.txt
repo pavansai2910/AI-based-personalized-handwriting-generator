@@ -1,0 +1,27 @@
+# Personalized Handwriting Generator (VATr + ResNet-50) - Python 3.10 to 3.12
+# Install:  pip install -r requirements.txt
+# For CUDA builds of PyTorch see https://pytorch.org/get-started/locally/
+
+# Core deep learning
+torch>=2.1
+torchvision>=0.16
+
+# Images and arrays
+numpy>=1.24
+opencv-python>=4.8
+pillow>=10.0
+
+# Web interface
+streamlit>=1.35
+
+# Training and evaluation (notebook)
+matplotlib>=3.7
+scipy>=1.10
+scikit-learn>=1.3
+pandas>=2.0
+scikit-image>=0.21
+gudhi>=3.8
+
+# Optional: dataset download and running the notebook locally
+kagglehub>=0.2
+jupyter>=1.0
